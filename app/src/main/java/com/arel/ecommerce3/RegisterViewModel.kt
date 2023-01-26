@@ -5,6 +5,7 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import com.arel.ecommerce3.data.UserApi
+import okhttp3.MultipartBody
 import okhttp3.RequestBody
 import retrofit2.Call
 import retrofit2.Callback
@@ -19,10 +20,11 @@ class RegisterViewModel : ViewModel() {
         password: RequestBody,
         name: RequestBody,
         phone: RequestBody,
-        gender: Int
+        gender: Int,
+        image: MultipartBody.Part
     ) {
-        val retro = ApiConfig.getRetrofitClientInstance().create(UserApi::class.java)
-        retro.postRegister(apiKey, email, password, name, phone, gender).enqueue(object :
+        val retro = Retrofit().getRetroClientInstance().create(UserApi::class.java)
+        retro.postRegister(apiKey, email, password, name, phone, gender, image).enqueue(object :
             Callback<RegisterResponse> {
             override fun onResponse(
                 call: Call<RegisterResponse>,

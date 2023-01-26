@@ -1,8 +1,13 @@
 package com.arel.ecommerce3
 
 import android.app.Activity
+import android.content.ContentResolver
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
@@ -10,21 +15,63 @@ import android.provider.MediaStore
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
 import com.arel.ecommerce3.databinding.ActivityRegisterBinding
+import com.arel.ecommerce3.utils.createCustomTempFile
+import com.arel.ecommerce3.utils.rotateBitmap
+import com.arel.ecommerce3.utils.uriToFile
 import kotlinx.android.synthetic.main.activity_register.*
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.*
 import java.util.regex.Pattern
 
 class RegisterActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityRegisterBinding
+    private lateinit var loadingDialog: LoadingDialog
     private val viewModel by viewModels<RegisterViewModel>()
     private val emailPattern = Pattern.compile("[a-zA-Z0-9._-]+@[a-z]+\\.+[a-z]+")
     private val PICK_IMAGE_GALLERY = 1
     private val PICK_IMAGE_CAMERA = 2
+    private val _isLoading = MutableLiveData<Boolean>()
+    val isLoading: LiveData<Boolean> = _isLoading
+    private val _toastText = MutableLiveData<Event<String>>()
+    val toastText: LiveData<Event<String>> = _toastText
+
+    companion object {
+        val REQUIRED_PERMISSIONS = arrayOf(android.Manifest.permission.CAMERA)
+        const val REQUEST_CODE_PERMISSIONS = 10
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_CODE_PERMISSIONS) {
+
+            if (!allPermissionGranted()) {
+                Toast.makeText(this, "Tidak mendapatkan permission", Toast.LENGTH_SHORT).show()
+                finish()
+            }
+        }
+    }
+
+    private fun allPermissionGranted() = REQUIRED_PERMISSIONS.all {
+        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
+    }
 
 
     // (Primary Function)
@@ -34,29 +81,21 @@ class RegisterActivity : AppCompatActivity() {
         binding =ActivityRegisterBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        setupView()
         setupDataRegister()
         binding.btCamera.setOnClickListener {
             changePhoto()
         }
 
-    }
-
-    // (Secondary Function)
-    // setupView Function
-
-    private fun setupView() {
-        @Suppress("DEPRECATION")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.insetsController?.hide(WindowInsets.Type.statusBars())
-        } else {
-            window.setFlags(
-                WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                WindowManager.LayoutParams.FLAG_FULLSCREEN
+        if (!allPermissionGranted()) {
+            ActivityCompat.requestPermissions(
+                this,
+                REQUIRED_PERMISSIONS,
+                REQUEST_CODE_PERMISSIONS
             )
         }
-        supportActionBar?.hide()
+
     }
+
 
     // setupDataRegister Function
 
@@ -113,30 +152,70 @@ class RegisterActivity : AppCompatActivity() {
             startActivityForResult(Intent.createChooser(intent, "Select Picture"), PICK_IMAGE_GALLERY)
         }
         dialog.setNegativeButton("Camera") { dialog, which ->
-            val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-            startActivityForResult(intent, PICK_IMAGE_CAMERA)
+            startTakePhoto()
         }
         val alert = dialog.create()
         alert.show()
     }
 
+    private var getFile: File? = null
+    private lateinit var currentPhotoPath: String
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (resultCode == Activity.RESULT_OK) {
             if (requestCode == PICK_IMAGE_GALLERY) {
-                val imageUri = data?.data
+                val imageUri = data?.data as Uri
+                val myFile = uriToFile(imageUri, this@RegisterActivity)
+                getFile = myFile
                 binding.uploadPhotoRegister.setImageURI(imageUri)
-            } else if (requestCode == PICK_IMAGE_CAMERA) {
-                val imageUri = data?.extras?.get("data") as Bitmap
-                binding.uploadPhotoRegister.setImageBitmap(imageUri)
             }
         }
     }
+        private fun startTakePhoto() {
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        intent.resolveActivity(packageManager)
+        createCustomTempFile(application).also {
+            val photoURI : Uri = FileProvider.getUriForFile(
+                this@RegisterActivity,
+                "com.arel.ecommerce3",
+                it
+            )
+            currentPhotoPath = it.absolutePath
+            intent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI)
+            launcherIntentCamera.launch(intent)
+        }
+
+    }
+    private val launcherIntentCamera = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (it.resultCode == RESULT_OK) {
+            val myFile = File(currentPhotoPath)
+            getFile = myFile
+            val isBackCamera = true
+
+            val result = rotateBitmap(
+                BitmapFactory.decodeFile(myFile.path),
+                isBackCamera
+            )
+//            val result = BitmapFactory.decodeFile(myFile.path)
+            binding.uploadPhotoRegister.setImageBitmap(result)
+        }
+    }
+
+
 
 
     // Eksternal Function
 
     private fun register() {
+        val file = reduceFileImage(getFile as File)
+        val requestImageFile = file.asRequestBody("image/jpeg".toMediaTypeOrNull())
+        val imageMultiPart: MultipartBody.Part = MultipartBody.Part.createFormData(
+            "image",
+            file.name,
+            requestImageFile)
         val email = binding.etEmailSignup.text.toString()
         val password = binding.etPasswordSignup.text.toString()
         val name = binding.etNameSignup.text.toString()
@@ -144,7 +223,7 @@ class RegisterActivity : AppCompatActivity() {
         val male = binding.rbGenderMale
         val female = binding.rbGenderFemale
         val gender = if (binding.rbGenderFemale.isChecked) isGender(binding.rbGenderFemale.isChecked) else isGender(binding.rbGenderMale.isChecked)
-        val imageUri = binding.uploadPhotoRegister
+
 
         when {
             !isValidString(email) -> binding.etEmailSignup.error = "Silahkan isi data diri anda"
@@ -166,10 +245,35 @@ class RegisterActivity : AppCompatActivity() {
                     nameBody,
                     phoneBody,
                     gender,
-//                    MultipartBody.Part
+                    imageMultiPart
                 )
             }
         }
+        isLoading.observe(this) {
+            showLoadingDialog(it)
+        }
+
+        toastText.observe(this) {
+            it.getContentIfNotHandled()?.let { toastText ->
+                showToast(toastText)
+            }
+        }
+    }
+
+
+    private fun reduceFileImage(file: File): File {
+        val bitmap = BitmapFactory.decodeFile(file.path)
+        var compressQuality = 100
+        var streamLength: Int
+        do {
+            val bmpStream = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, compressQuality, bmpStream)
+            val bmPicByArray = bmpStream.toByteArray()
+            streamLength = bmPicByArray.size
+            compressQuality -= 5
+        } while (streamLength > 1000000)
+        bitmap.compress(Bitmap.CompressFormat.JPEG, compressQuality, FileOutputStream(file))
+        return file
     }
 
     private fun isValidString(str: String): Boolean {
@@ -183,6 +287,13 @@ class RegisterActivity : AppCompatActivity() {
         } else {
             0
         }
+    }
+
+    private fun showLoadingDialog(isLoading: Boolean) {
+        if (isLoading) loadingDialog.startLoading() else loadingDialog.isDismiss()
+    }
+    private fun showToast(str : String) {
+        Toast.makeText(this, str, Toast.LENGTH_SHORT).show()
     }
 
 }

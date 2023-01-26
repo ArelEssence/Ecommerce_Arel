@@ -14,6 +14,8 @@
     <color name="nav_unselected">#999999</color>
     <color name="pink">#F49DBB</color>
     <color name="warna_toolbar">#E486A7</color>
+    <color name="transparent">#00FFFFFF</color>
+    <color name="grey">#FFC7CD</color>
 
 
 </resources>
